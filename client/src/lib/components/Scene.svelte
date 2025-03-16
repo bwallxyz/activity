@@ -39,6 +39,30 @@
 		}
 	});
 
+	async function initPlayroom() {
+  const isDiscord = window.location.href.includes("discord.com");
+  
+  if (isDiscord) {
+    // Discord-specific initialization
+    await insertCoin({
+      gameId: PUBLIC_PLAYROOM_ID,
+      discord: true,
+      // Don't use fallback players in Discord
+      createFallbackPlayers: false
+    });
+  } else {
+    // Browser-specific initialization
+    await insertCoin({
+      gameId: PUBLIC_PLAYROOM_ID,
+      createFallbackPlayers: true,
+      // Default player name when not in Discord
+      playerName: "Player_" + Math.floor(Math.random() * 1000)
+    });
+  }
+  
+  return me();
+}
+
 	async function initPhysics() {
 		await RAPIER.init();
 		return new RAPIER.World(gravity);
