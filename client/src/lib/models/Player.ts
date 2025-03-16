@@ -14,7 +14,7 @@ export class Player {
 	private sensorCollider: RAPIER.Collider;
 
 	constructor(
-		public playerState: PlayerState,
+		public playerState: any,
 		private scene: THREE.Scene,
 		private world: RAPIER.World,
 		private groundCollider: RAPIER.Collider,
@@ -107,7 +107,15 @@ export class Player {
 
 		const playerPos = this.rigidBody.translation();
 		this.mesh.position.set(playerPos.x, playerPos.y, playerPos.z);
-		this.playerState.setState("pos", { x: playerPos.x, y: playerPos.y, z: playerPos.z });
+		
+		// Only update state if playerState has setState method (could be fake in Discord)
+		if (this.playerState && typeof this.playerState.setState === 'function') {
+			try {
+				this.playerState.setState("pos", { x: playerPos.x, y: playerPos.y, z: playerPos.z });
+			} catch (error) {
+				console.error("Error updating player state:", error);
+			}
+		}
 
 		this.isGrounded = this.world.intersectionPair(this.sensorCollider, this.groundCollider);
 	}

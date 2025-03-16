@@ -9,7 +9,6 @@
 	import { ConvexHull } from "three/examples/jsm/Addons.js";
 	import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 	import RAPIER from "@dimforge/rapier3d-compat";
-	import { onPlayerJoin, me } from "playroomkit";
 
 	// Utils
 	import { Player } from "$lib/models/Player";
@@ -28,40 +27,29 @@
 	let composer;
 	let rootElement;
 	let camera;
+	
+	// Fake player state for testing in Discord
+	const fakePlayerState = {
+		id: "local-player",
+		getState: (key) => ({}),
+		setState: (key, value) => {}, 
+		getProfile: () => ({ name: "LocalPlayer" }),
+		getColor: () => "#FF0000",
+		onQuit: (callback) => {}
+	};
 
 	onMount(async () => {
 		try {
 			const world = await initPhysics();
 			const scene = initThree(world);
-			initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+			// Skip guest initialization in Discord as it depends on PlayroomKit
+			if (!window.location.href.includes("discord.com")) {
+				initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+			}
 		} catch (error) {
 			console.error("Failed to initialize scene:", error);
 		}
 	});
-
-	async function initPlayroom() {
-  const isDiscord = window.location.href.includes("discord.com");
-  
-  if (isDiscord) {
-    // Discord-specific initialization
-    await insertCoin({
-      gameId: PUBLIC_PLAYROOM_ID,
-      discord: true,
-      // Don't use fallback players in Discord
-      createFallbackPlayers: false
-    });
-  } else {
-    // Browser-specific initialization
-    await insertCoin({
-      gameId: PUBLIC_PLAYROOM_ID,
-      createFallbackPlayers: true,
-      // Default player name when not in Discord
-      playerName: "Player_" + Math.floor(Math.random() * 1000)
-    });
-  }
-  
-  return me();
-}
 
 	async function initPhysics() {
 		await RAPIER.init();
@@ -91,10 +79,31 @@
 
 		// Initial setups
 		const ground = new Ground(scene, world, 20);
-		const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
-		setupMap(scene, world);
+		
+		// Use fake player state when in Discord to avoid PlayroomKit dependencies
+		const playerState = window.location.href.includes("discord.com") ? 
+			fakePlayerState : window.me();
+		
+		const player = new Player(
+			playerState, 
+			scene, 
+			world, 
+			ground.rigidBody.collider(0), 
+			camera, 
+			new THREE.Vector3(0, 2, 0)
+		);
+		
+		// Skip loading remote assets in Discord due to CSP
+		const isDiscord = window.location.href.includes("discord.com");
+		if (!isDiscord) {
+			setupMap(scene, world);
+			setupHDRI(scene);
+		} else {
+			// Create a simple scene for Discord
+			createSimpleScene(scene);
+		}
+		
 		setupLights(scene);
-		setupHDRI(scene);
 
 		// Events
 		handleResize(renderer, labelRenderer, camera);
@@ -112,6 +121,46 @@
 
 		return scene;
 	}
+	
+	function createSimpleScene(scene) {
+		// Add simple geometry instead of loading GLB
+		const floorGeometry = new THREE.PlaneGeometry(40, 40);
+		const floorMaterial = new THREE.MeshStandardMaterial({ 
+			color: 0x8ADBA2,
+			side: THREE.DoubleSide 
+		});
+		const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+		floor.rotation.x = -Math.PI / 2;
+		floor.position.y = 0;
+		floor.receiveShadow = true;
+		scene.add(floor);
+		
+		// Add some simple structures
+		for (let i = 0; i < 5; i++) {
+			const boxGeometry = new THREE.BoxGeometry(2, 4, 2);
+			const boxMaterial = new THREE.MeshStandardMaterial({ 
+				color: 0x888888 
+			});
+			const box = new THREE.Mesh(boxGeometry, boxMaterial);
+			box.position.set(
+				(Math.random() - 0.5) * 20,
+				2,
+				(Math.random() - 0.5) * 20
+			);
+			box.castShadow = true;
+			box.receiveShadow = true;
+			scene.add(box);
+		}
+		
+		// Create simple sky
+		const skyGeometry = new THREE.SphereGeometry(100, 32, 32);
+		skyGeometry.scale(-1, 1, 1);
+		const skyMaterial = new THREE.MeshBasicMaterial({
+			color: 0x87CEEB
+		});
+		const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+		scene.add(sky);
+	}
 
 	function handleResize(renderer, labelRenderer, camera) {
 		window.addEventListener("resize", () => {
@@ -126,8 +175,8 @@
 	}
 
 	function initGuests(scene, world, spawnPos) {
-		onPlayerJoin((playerState) => {
-			const myState = me();
+		window.onPlayerJoin((playerState) => {
+			const myState = window.me();
 			if (!myState) return;
 			
 			const guestState = playerState;
