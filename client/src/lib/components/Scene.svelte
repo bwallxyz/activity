@@ -94,96 +94,53 @@
 		rootElement.appendChild(fallbackMsg);
 	}
 
-	function initThree(world: RAPIER.World) {
-  try {
-    const renderWidth = rootElement.clientWidth;
-    const renderHeight = rootElement.clientHeight;
+function initThree(world: RAPIER.World) {
+	const renderWidth = rootElement.clientWidth;
+	const renderHeight = rootElement.clientHeight;
 
-    logDebug(`Setting up renderer: ${renderWidth}x${renderHeight}`);
+	const labelRenderer = new CSS2DRenderer();
+	labelRenderer.setSize(renderWidth, renderHeight);
+	labelRenderer.domElement.style.position = "absolute";
+	labelRenderer.domElement.style.top = "0px";
+	rootElement.appendChild(labelRenderer.domElement);
 
-    const labelRenderer = new CSS2DRenderer();
-    labelRenderer.setSize(renderWidth, renderHeight);
-    labelRenderer.domElement.style.position = "absolute";
-    labelRenderer.domElement.style.top = "0px";
-    rootElement.appendChild(labelRenderer.domElement);
+	const renderer = new THREE.WebGLRenderer({ antialias: true });
+	renderer.setSize(renderWidth, renderHeight);
+	renderer.setPixelRatio(window.devicePixelRatio);
+	renderer.shadowMap.enabled = true;
+	renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+	rootElement.appendChild(renderer.domElement);
 
-    // Simplified renderer options for Discord compatibility
-    renderer = new THREE.WebGLRenderer({ 
-      antialias: false,
-      alpha: true,
-      preserveDrawingBuffer: true,
-      powerPreference: 'default'
-    });
+	const scene = new THREE.Scene();
+
+	camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
     
-    renderer.setSize(renderWidth, renderHeight);
-    renderer.setPixelRatio(1.0); // Force lowest pixel ratio for performance
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.BasicShadowMap; // Use basic for performance
-    rootElement.appendChild(renderer.domElement);
+	// Initialize the composer
+	composer = new EffectComposer(renderer);
+	composer.setSize(renderWidth, renderHeight);
 
-    const scene = new THREE.Scene();
-    logDebug("Scene created");
+	// Initial setups
+	const ground = new Ground(scene, world, 20);
+	const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
+	setupMap(scene, world);
+	setupLights(scene);
+	setupHDRI(scene);
 
-    camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
-    camera.near = 0.1;
-    camera.far = 1000;
-    logDebug("Camera created");
+	// Events
+	handleResize(renderer, labelRenderer, camera);
+	rootElement.addEventListener("click", () => {
+		rootElement.requestPointerLock();
+	});
 
-    // Create a minimal scene first to ensure rendering works
-    createMinimalScene(scene);
-    
-    // Then attempt to load the full scene
-    const ground = new Ground(scene, world, 20);
-    logDebug("Ground created");
-    
-    const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
-    logDebug("Player created");
-    
-    // Load assets asynchronously
-    Promise.all([
-      loadMapAsync(scene, world),
-      loadSkyboxAsync(scene)
-    ]).then(() => {
-      logDebug("All assets loaded successfully", "success");
-    }).catch(err => {
-      logDebug(`Asset loading failed: ${err}`, "error");
-      fallbackScene = true;
-    });
+	renderer.setAnimationLoop((time) => {
+		player.update();
+		updateGuests();
+		world.step();
+		renderer.render(scene, camera);
+		labelRenderer.render(scene, camera);
+	});
 
-    // Setup basic lighting
-    const ambientLight = new THREE.AmbientLight("#FFFFFF", 1.5); // Brighter ambient light
-    scene.add(ambientLight);
-    
-    // Simplified directional light
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
-    directionalLight.position.set(-10, 10, 0);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 1024; // Reduced for performance
-    directionalLight.shadow.mapSize.height = 1024;
-    scene.add(directionalLight);
-
-    // Events
-    handleResize(renderer, labelRenderer, camera);
-    rootElement.addEventListener("click", () => {
-      rootElement.requestPointerLock();
-    });
-
-    // Animation loop
-    renderer.setAnimationLoop((time) => {
-      if (initSuccessful) {
-        player.update();
-        updateGuests();
-        world.step();
-        renderer.render(scene, camera);
-        labelRenderer.render(scene, camera);
-      }
-    });
-
-    return scene;
-  } catch (error) {
-    logDebug(`Three.js initialization error: ${error}`, 'error');
-    throw error;
-  }
+	return scene;
 }
 
 // Add these new helper functions
@@ -305,71 +262,39 @@ function loadSkyboxAsync(scene) {
 	}
 
 	async function initPlayroom() {
-  try {
-    logDebug(`Connecting to Playroom with ID: ${PUBLIC_PLAYROOM_ID}`);
-    
-    // Check if in Discord and use appropriate mode
-    const discordMode = window.location.href.includes('discord.com') || 
-                      window.location.hostname.includes('discord');
-                      
-    await insertCoin({
-      gameId: PUBLIC_PLAYROOM_ID,
-      discord: discordMode,
-      features: {
-        debug: true,
-        shareLinks: false
-      }
-    });
-    
-    logDebug("Playroom connection successful");
-    return me();
-  } catch (error) {
-    logDebug(`Playroom initialization error: ${error}`, 'error');
-    
-    // Return a mock player state when in Discord to allow rendering without Playroom
-    if (isDiscordEnvironment) {
-      logDebug("Using fallback player state for Discord", 'info');
-      return {
-        id: "local-player",
-        getProfile: () => ({ name: "Local Player", photo: "" }),
-        getState: () => ({}),
-        setState: () => ({})
-      };
-    }
-    
-    throw error;
-  }
-}
-
-	function setupMap(scene: THREE.Scene, world: RAPIER.World) {
-		const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
-		
-		logDebug("Loading map model");
-		
-		// Use absolute path for Discord environment
-		loader.load(
-			"/scenes/map.glb",
-			function (gltf) {
-				const model = gltf.scene;
-				logDebug("Map model loaded successfully");
-				model.traverse((node) => {
-					if (node instanceof THREE.Mesh) {
-						node.castShadow = true;
-						node.receiveShadow = true;
-						if (!excludedMeshes.includes(node.name)) setupCollider(world, node);
-					}
-				});
-				scene.add(model);
-				initStatus.update(s => ({ ...s, assets: { ...s.assets, models: true }}));
-			},
-			function (progress) {
-				logDebug(`Map loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
-			},
-			function (error) {
-				logDebug(`Error loading map GLB: ${error}`, 'error');
+	try {
+		await insertCoin({
+			gameId: PUBLIC_PLAYROOM_ID, 
+			// Enable more Discord options for better integration
+			discord: {
+				// Include required Discord scopes
+				requiredScopes: ["identify", "activities.write"],
+				// Make sure to request proper permissions for Activity
+				permissions: ["activities.write"],
+				// Ensure the activity is properly configured
+				activityConfig: {
+					type: 0, // Playing
+					details: "3D Chat",
+					instance: true
+				}
 			}
-		);
+		});
+		return me();
+	} catch (error) {
+		console.error("Failed to initialize PlayroomKit:", error);
+		// Create fallback UI to inform the user
+		const errorDiv = document.createElement("div");
+		errorDiv.className = "fixed inset-0 bg-black/80 text-white flex flex-col items-center justify-center p-5";
+		errorDiv.innerHTML = `
+			<h1 class="text-2xl font-bold mb-4">Connection Error</h1>
+			<p class="text-center mb-4">Could not connect to Discord. Please make sure you're running this in Discord or try refreshing.</p>
+			<button class="px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700">Refresh</button>
+		`;
+		errorDiv.querySelector("button")?.addEventListener("click", () => location.reload());
+		document.body.appendChild(errorDiv);
+		throw error;
 	}
+}
 
 	function setupCollider(world: RAPIER.World, node: THREE.Mesh) {
 		try {
