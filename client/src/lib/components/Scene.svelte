@@ -296,22 +296,86 @@ function loadSkyboxAsync(scene) {
 	}
 }
 
-	function setupCollider(world: RAPIER.World, node: THREE.Mesh) {
-		try {
-			const convexHull = new ConvexHull().setFromObject(node);
-			const vertices = convexHull.vertices;
-			const buffer = new Float32Array(convexHull.vertices.length * 3);
-			for (let i = 0; i < vertices.length; i++) {
-				buffer[i * 3] = vertices[i].point.x;
-				buffer[i * 3 + 1] = vertices[i].point.y;
-				buffer[i * 3 + 2] = vertices[i].point.z;
-			}
-			const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer) as RAPIER.ColliderDesc;
-			world.createCollider(meshColliderDesc);
-		} catch (error) {
-			logDebug(`Error creating collider for mesh ${node.name}: ${error}`, 'error');
-		}
-	}
+function setupMap(scene: THREE.Scene, world: RAPIER.World) {
+    // Create a simple floor plane for now if GLB loading fails
+    const floorGeometry = new THREE.PlaneGeometry(40, 40);
+    const floorMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x5a5a5a,
+        roughness: 0.8
+    });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    
+    // Set up a basic collider for the floor
+    const floorColliderDesc = RAPIER.ColliderDesc.cuboid(20, 0.1, 20);
+    floorColliderDesc.setTranslation(0, -0.1, 0);
+    world.createCollider(floorColliderDesc);
+    
+    // Attempt to load the detailed map as before
+    const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
+    loader.load(
+        "scenes/map.glb",
+        function (gltf) {
+            const model = gltf.scene;
+            model.traverse((node) => {
+                if (node instanceof THREE.Mesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                    if (!excludedMeshes.includes(node.name)) {
+                        try {
+                            setupCollider(world, node);
+                        } catch (error) {
+                            console.error("Failed to set up collider for", node.name, error);
+                        }
+                    }
+                }
+            });
+            scene.add(model);
+            // Remove the simple floor once the model is loaded
+            scene.remove(floor);
+        },
+        undefined,
+        function (error) {
+            console.log("Error loading GLB:", error);
+            // Keep the simple floor if GLB loading fails
+        }
+    );
+}
+
+function setupCollider(world: RAPIER.World, node: THREE.Mesh) {
+    try {
+        const convexHull = new ConvexHull().setFromObject(node);
+        const vertices = convexHull.vertices;
+        const buffer = new Float32Array(vertices.length * 3);
+        for (let i = 0; i < vertices.length; i++) {
+            buffer[i * 3] = vertices[i].point.x;
+            buffer[i * 3 + 1] = vertices[i].point.y;
+            buffer[i * 3 + 2] = vertices[i].point.z;
+        }
+        const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer);
+        if (meshColliderDesc) {
+            world.createCollider(meshColliderDesc);
+        }
+    } catch (error) {
+        console.error("Error creating collider:", error);
+        // Fallback to a simple box collider based on the mesh's bounding box
+        const bbox = new THREE.Box3().setFromObject(node);
+        const size = new THREE.Vector3();
+        bbox.getSize(size);
+        const center = new THREE.Vector3();
+        bbox.getCenter(center);
+        
+        const boxColliderDesc = RAPIER.ColliderDesc.cuboid(
+            Math.max(0.1, size.x / 2), 
+            Math.max(0.1, size.y / 2), 
+            Math.max(0.1, size.z / 2)
+        );
+        boxColliderDesc.setTranslation(center.x, center.y, center.z);
+        world.createCollider(boxColliderDesc);
+    }
+}
 
 	function setupLights(scene: THREE.Scene) {
 		const ambientLight = new THREE.AmbientLight("#E6F9EC", 1);
