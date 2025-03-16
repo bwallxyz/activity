@@ -10,6 +10,18 @@
   let isDiscord = false;
   
   onMount(() => {
+
+	debugLog.subscribe(logs => {
+  const playroomFailed = logs.some(log => 
+    log.includes('Playroom initialization error') || 
+    log.includes('Discord auth failed')
+  );
+  
+  if (playroomFailed && isDiscord) {
+    console.log("Playroom authentication failed, switching to fallback scene");
+    useMainScene = false;
+  }
+});
     // Check if we're in Discord
     isDiscord = window.location.href.includes('discord.com') || 
                window.location.hostname.includes('discord') ||

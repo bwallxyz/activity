@@ -305,43 +305,41 @@ function loadSkyboxAsync(scene) {
 	}
 
 	async function initPlayroom() {
-		try {
-			logDebug(`Connecting to Playroom with ID: ${PUBLIC_PLAYROOM_ID}`);
-			await insertCoin({
-				gameId: PUBLIC_PLAYROOM_ID,
-				discord: true,
-			});
-			logDebug("Playroom connection successful");
-			return me();
-		} catch (error) {
-			logDebug(`Playroom initialization error: ${error}`, 'error');
-			throw error;
-		}
-	}
-
-	function initGuests(scene: THREE.Scene, world: RAPIER.World, spawnPos: THREE.Vector3) {
-		onPlayerJoin((playerState) => {
-			const myState = me();
-			const guestState = playerState;
-			
-			logDebug(`Player joined: ${guestState.id}`);
-			
-			if (guestState.id !== myState.id || debug) {
-				const guest = new Guest(guestState, scene, world, spawnPos, debug);
-				$guests = [...$guests, guest];
-				logDebug(`Guest added: ${guestState.getProfile().name}`);
-			}
-			
-			playerState.onQuit(() => {
-				const guest = $guests.find((g) => g.playerState.id === playerState.id);
-				if (guest) {
-					guest.despawn();
-					$guests = $guests.filter((g) => g.playerState.id !== playerState.id);
-					logDebug(`Guest left: ${playerState.getProfile().name}`);
-				}
-			});
-		});
-	}
+  try {
+    logDebug(`Connecting to Playroom with ID: ${PUBLIC_PLAYROOM_ID}`);
+    
+    // Check if in Discord and use appropriate mode
+    const discordMode = window.location.href.includes('discord.com') || 
+                      window.location.hostname.includes('discord');
+                      
+    await insertCoin({
+      gameId: PUBLIC_PLAYROOM_ID,
+      discord: discordMode,
+      features: {
+        debug: true,
+        shareLinks: false
+      }
+    });
+    
+    logDebug("Playroom connection successful");
+    return me();
+  } catch (error) {
+    logDebug(`Playroom initialization error: ${error}`, 'error');
+    
+    // Return a mock player state when in Discord to allow rendering without Playroom
+    if (isDiscordEnvironment) {
+      logDebug("Using fallback player state for Discord", 'info');
+      return {
+        id: "local-player",
+        getProfile: () => ({ name: "Local Player", photo: "" }),
+        getState: () => ({}),
+        setState: () => ({})
+      };
+    }
+    
+    throw error;
+  }
+}
 
 	function setupMap(scene: THREE.Scene, world: RAPIER.World) {
 		const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
