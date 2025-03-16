@@ -15,11 +15,17 @@
 	let UI;
 	
 	onMount(async () => {
+		loading = true;
+		
 		try {
-			// Try to initialize PlayroomKit without requiring Discord
+			// Check if we're in Discord
+			const isDiscord = window.location.href.includes("discord.com");
+			
+			// Initialize PlayroomKit with appropriate options
 			await insertCoin({
 				gameId: PUBLIC_PLAYROOM_ID,
-				createFallbackPlayers: true,
+				createFallbackPlayers: !isDiscord, // Only create fallback players if not in Discord
+				discord: isDiscord, // Enable Discord mode if we're in Discord
 				playerName: "Player" 
 			});
 			
@@ -36,6 +42,7 @@
 		} catch (err) {
 			console.error("Failed to initialize:", err);
 			error = "Failed to initialize game. Please try again.";
+			authenticated = false;
 		} finally {
 			loading = false;
 		}
@@ -82,6 +89,15 @@
 			<div class="text-white text-center">
 				<div class="animate-spin rounded-full h-16 w-16 border-b-2 border-white mx-auto mb-4"></div>
 				<p class="text-xl">Loading...</p>
+				{#if error}
+					<p class="text-red-400 mt-4">{error}</p>
+					<button 
+						class="mt-4 px-4 py-2 bg-blue-600 rounded-md text-white"
+						on:click={() => window.location.reload()}
+					>
+						Retry
+					</button>
+				{/if}
 			</div>
 		</div>
 	{:else if authenticated}
