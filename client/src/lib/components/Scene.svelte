@@ -4,10 +4,10 @@
 
 	// Libs
 	import * as THREE from "three";
-	import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-	import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-	import { ConvexHull } from "three/examples/jsm/Addons.js";
-	import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+	import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+	import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+	import { ConvexHull } from "three/examples/jsm/math/ConvexHull.js";
+	import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 	import RAPIER from "@dimforge/rapier3d-compat";
 	import { insertCoin, onPlayerJoin, me } from "playroomkit";
 
@@ -18,6 +18,7 @@
 	import { Player } from "$lib/models/Player";
 	import { Ground } from "$lib/models/Ground";
 	import { Guest } from "$lib/models/Guest";
+	import { logDebug, initStatus, checkWebGLSupport } from "$lib/utils/debugHelper";
 
 	// Stores
 	import { guests } from "$lib/stores/guests";
@@ -31,97 +32,197 @@
 	let composer: EffectComposer;
 	let rootElement: HTMLElement;
 	let camera: THREE.PerspectiveCamera;
+	let renderer: THREE.WebGLRenderer;
+	let isDiscordEnvironment = false;
+	let initSuccessful = false;
 
 	onMount(async () => {
-		const world = await initPhysics();
-		await initPlayroom();
-		const scene = initThree(world);
-		initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+		logDebug("Component mounted - starting initialization");
+        
+		// Check if we're in Discord
+		try {
+			isDiscordEnvironment = window.location.href.includes('discord.com') || 
+								  window.location.hostname.includes('discord') ||
+								  document.referrer.includes('discord');
+			logDebug(`Environment detection: ${isDiscordEnvironment ? 'Discord' : 'Browser'}`);
+		} catch (e) {
+			logDebug(`Environment detection error: ${e}`, 'error');
+		}
+        
+		// Check WebGL support first
+		if (!checkWebGLSupport()) {
+			logDebug("WebGL not supported, aborting initialization", 'error');
+			showFallbackMessage("WebGL not supported on this device or browser");
+			return;
+		}
+
+		try {
+			logDebug("Initializing physics");
+			const world = await initPhysics();
+			initStatus.update(s => ({ ...s, physics: true }));
+            
+			logDebug("Initializing Playroom");
+			await initPlayroom();
+			initStatus.update(s => ({ ...s, playroom: true }));
+            
+			logDebug("Initializing Three.js");
+			const scene = initThree(world);
+			initStatus.update(s => ({ ...s, three: true }));
+            
+			logDebug("Initializing guests");
+			initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+            
+			initSuccessful = true;
+			logDebug("Initialization complete", 'success');
+		} catch (error) {
+			logDebug(`Initialization error: ${error}`, 'error');
+			showFallbackMessage("Failed to initialize 3D environment");
+		}
 	});
 
+	function showFallbackMessage(message: string) {
+		// Create a fallback message when 3D rendering fails
+		const fallbackMsg = document.createElement('div');
+		fallbackMsg.innerHTML = message;
+		fallbackMsg.style.color = 'white';
+		fallbackMsg.style.padding = '20px';
+		fallbackMsg.style.textAlign = 'center';
+		fallbackMsg.style.backgroundColor = 'rgba(0,0,0,0.7)';
+		fallbackMsg.style.borderRadius = '8px';
+		fallbackMsg.style.margin = '20px';
+		rootElement.appendChild(fallbackMsg);
+	}
+
 	function initThree(world: RAPIER.World) {
-		const renderWidth = rootElement.clientWidth;
-		const renderHeight = rootElement.clientHeight;
+		try {
+			const renderWidth = rootElement.clientWidth;
+			const renderHeight = rootElement.clientHeight;
 
-		const labelRenderer = new CSS2DRenderer();
-		labelRenderer.setSize(renderWidth, renderHeight);
-		labelRenderer.domElement.style.position = "absolute";
-		labelRenderer.domElement.style.top = "0px";
-		rootElement.appendChild(labelRenderer.domElement);
+			logDebug(`Setting up renderer: ${renderWidth}x${renderHeight}`);
 
-		const renderer = new THREE.WebGLRenderer({ antialias: true });
-		renderer.setSize(renderWidth, renderHeight);
-		renderer.setPixelRatio(window.devicePixelRatio);
-		renderer.shadowMap.enabled = true;
-		renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-		rootElement.appendChild(renderer.domElement);
+			const labelRenderer = new CSS2DRenderer();
+			labelRenderer.setSize(renderWidth, renderHeight);
+			labelRenderer.domElement.style.position = "absolute";
+			labelRenderer.domElement.style.top = "0px";
+			rootElement.appendChild(labelRenderer.domElement);
 
-		const scene = new THREE.Scene();
+			renderer = new THREE.WebGLRenderer({ 
+				antialias: true,
+				powerPreference: 'high-performance',
+				alpha: false
+			});
+			
+			renderer.setSize(renderWidth, renderHeight);
+			renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio
+			renderer.shadowMap.enabled = true;
+			renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+			rootElement.appendChild(renderer.domElement);
 
-		camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
+			const scene = new THREE.Scene();
+			logDebug("Scene created");
 
-		// Initial setups
-		const ground = new Ground(scene, world, 20);
-		const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
-		setupMap(scene, world);
-		setupLights(scene);
-		setupHDRI(scene);
+			camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
+			camera.near = 0.1;
+			camera.far = 1000;
+			logDebug("Camera created");
 
-		// Events
-		handleResize(renderer, labelRenderer, camera);
-		rootElement.addEventListener("click", () => {
-			rootElement.requestPointerLock();
-		});
+			// Initial setups
+			const ground = new Ground(scene, world, 20);
+			logDebug("Ground created");
+			
+			const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
+			logDebug("Player created");
+			
+			setupMap(scene, world);
+			setupLights(scene);
+			setupHDRI(scene);
 
-		renderer.setAnimationLoop((time) => {
-			player.update();
-			updateGuests();
-			world.step();
-			renderer.render(scene, camera);
-			labelRenderer.render(scene, camera);
-		});
+			// Events
+			handleResize(renderer, labelRenderer, camera);
+			rootElement.addEventListener("click", () => {
+				rootElement.requestPointerLock();
+			});
 
-		return scene;
+			renderer.setAnimationLoop((time) => {
+				if (initSuccessful) {
+					player.update();
+					updateGuests();
+					world.step();
+					renderer.render(scene, camera);
+					labelRenderer.render(scene, camera);
+				}
+			});
+
+			return scene;
+		} catch (error) {
+			logDebug(`Three.js initialization error: ${error}`, 'error');
+			throw error;
+		}
 	}
 
 	function handleResize(renderer: THREE.WebGLRenderer, labelRenderer: CSS2DRenderer, camera: THREE.PerspectiveCamera) {
 		window.addEventListener("resize", () => {
 			const newWidth = rootElement.clientWidth;
 			const newHeight = rootElement.clientHeight;
+			
+			logDebug(`Window resized: ${newWidth}x${newHeight}`);
+			
 			camera.aspect = newWidth / newHeight;
 			camera.updateProjectionMatrix();
 			renderer.setSize(newWidth, newHeight);
 			labelRenderer.setSize(newWidth, newHeight);
-			composer.setSize(newWidth, newHeight);
+			
+			if (composer) {
+				composer.setSize(newWidth, newHeight);
+			}
 		});
 	}
 
 	async function initPhysics() {
-		await RAPIER.init();
-		return new RAPIER.World(gravity);
+		try {
+			await RAPIER.init();
+			logDebug("RAPIER physics initialized");
+			return new RAPIER.World(gravity);
+		} catch (error) {
+			logDebug(`Physics initialization error: ${error}`, 'error');
+			throw error;
+		}
 	}
 
 	async function initPlayroom() {
-		await insertCoin({
-			gameId: PUBLIC_PLAYROOM_ID,
-			discord: true,
-		});
-		return me();
+		try {
+			logDebug(`Connecting to Playroom with ID: ${PUBLIC_PLAYROOM_ID}`);
+			await insertCoin({
+				gameId: PUBLIC_PLAYROOM_ID,
+				discord: true,
+			});
+			logDebug("Playroom connection successful");
+			return me();
+		} catch (error) {
+			logDebug(`Playroom initialization error: ${error}`, 'error');
+			throw error;
+		}
 	}
 
 	function initGuests(scene: THREE.Scene, world: RAPIER.World, spawnPos: THREE.Vector3) {
 		onPlayerJoin((playerState) => {
 			const myState = me();
 			const guestState = playerState;
+			
+			logDebug(`Player joined: ${guestState.id}`);
+			
 			if (guestState.id !== myState.id || debug) {
 				const guest = new Guest(guestState, scene, world, spawnPos, debug);
 				$guests = [...$guests, guest];
+				logDebug(`Guest added: ${guestState.getProfile().name}`);
 			}
+			
 			playerState.onQuit(() => {
 				const guest = $guests.find((g) => g.playerState.id === playerState.id);
 				if (guest) {
 					guest.despawn();
 					$guests = $guests.filter((g) => g.playerState.id !== playerState.id);
+					logDebug(`Guest left: ${playerState.getProfile().name}`);
 				}
 			});
 		});
@@ -129,10 +230,15 @@
 
 	function setupMap(scene: THREE.Scene, world: RAPIER.World) {
 		const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
+		
+		logDebug("Loading map model");
+		
+		// Use absolute path for Discord environment
 		loader.load(
-			"scenes/map.glb",
+			"/scenes/map.glb",
 			function (gltf) {
 				const model = gltf.scene;
+				logDebug("Map model loaded successfully");
 				model.traverse((node) => {
 					if (node instanceof THREE.Mesh) {
 						node.castShadow = true;
@@ -141,35 +247,43 @@
 					}
 				});
 				scene.add(model);
+				initStatus.update(s => ({ ...s, assets: { ...s.assets, models: true }}));
 			},
-			undefined,
+			function (progress) {
+				logDebug(`Map loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+			},
 			function (error) {
-				console.log("Error loading GLB:", error);
+				logDebug(`Error loading map GLB: ${error}`, 'error');
 			}
 		);
 	}
 
 	function setupCollider(world: RAPIER.World, node: THREE.Mesh) {
-		const convexHull = new ConvexHull().setFromObject(node);
-		const vertices = convexHull.vertices;
-		const buffer = new Float32Array(convexHull.vertices.length * 3);
-		for (let i = 0; i < vertices.length; i++) {
-			buffer[i * 3] = vertices[i].point.x;
-			buffer[i * 3 + 1] = vertices[i].point.y;
-			buffer[i * 3 + 2] = vertices[i].point.z;
+		try {
+			const convexHull = new ConvexHull().setFromObject(node);
+			const vertices = convexHull.vertices;
+			const buffer = new Float32Array(convexHull.vertices.length * 3);
+			for (let i = 0; i < vertices.length; i++) {
+				buffer[i * 3] = vertices[i].point.x;
+				buffer[i * 3 + 1] = vertices[i].point.y;
+				buffer[i * 3 + 2] = vertices[i].point.z;
+			}
+			const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer) as RAPIER.ColliderDesc;
+			world.createCollider(meshColliderDesc);
+		} catch (error) {
+			logDebug(`Error creating collider for mesh ${node.name}: ${error}`, 'error');
 		}
-		const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer) as RAPIER.ColliderDesc;
-		world.createCollider(meshColliderDesc);
 	}
 
 	function setupLights(scene: THREE.Scene) {
 		const ambientLight = new THREE.AmbientLight("#E6F9EC", 1);
 		scene.add(ambientLight);
+		
 		const directionalLight = new THREE.DirectionalLight(0xffffff, 4.2);
 		directionalLight.castShadow = true;
 		directionalLight.shadow.bias = -0.0001;
-		directionalLight.shadow.mapSize.width = 4096;
-		directionalLight.shadow.mapSize.height = 4096;
+		directionalLight.shadow.mapSize.width = 2048; // Reduced for performance
+		directionalLight.shadow.mapSize.height = 2048;
 		directionalLight.shadow.camera.near = 0.5;
 		directionalLight.shadow.camera.far = 500;
 		directionalLight.shadow.camera.left = -50;
@@ -179,15 +293,31 @@
 		directionalLight.rotation.z = Math.PI / 4;
 		directionalLight.position.set(-20, 20, 0);
 		scene.add(directionalLight);
+		
+		logDebug("Lights setup complete");
 	}
 
 	function setupHDRI(scene: THREE.Scene) {
-		const texture = textureLoader.load("textures/skybox.png");
-		const geometry = new THREE.SphereGeometry(200, 32, 32);
-		geometry.scale(-1, 1, 1);
-		const material = new THREE.MeshBasicMaterial({ map: texture });
-		const sphere = new THREE.Mesh(geometry, material);
-		scene.add(sphere);
+		logDebug("Loading skybox texture");
+		
+		textureLoader.load(
+			"/textures/skybox.png",
+			function(texture) {
+				logDebug("Skybox texture loaded successfully");
+				const geometry = new THREE.SphereGeometry(200, 32, 32);
+				geometry.scale(-1, 1, 1);
+				const material = new THREE.MeshBasicMaterial({ map: texture });
+				const sphere = new THREE.Mesh(geometry, material);
+				scene.add(sphere);
+				initStatus.update(s => ({ ...s, assets: { ...s.assets, textures: true }}));
+			},
+			function(progress) {
+				logDebug(`Skybox loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+			},
+			function(error) {
+				logDebug(`Error loading skybox texture: ${error}`, 'error');
+			}
+		);
 	}
 
 	function updateGuests() {
@@ -198,4 +328,15 @@
 </script>
 
 <!-- Main container -->
-<div class="h-full w-full flex flex-col justify-center items-center" bind:this={rootElement}></div>
+<div class="h-full w-full flex flex-col justify-center items-center relative" bind:this={rootElement}>
+	{#if isDiscordEnvironment && !initSuccessful}
+		<div class="absolute top-0 left-0 right-0 bottom-0 flex items-center justify-center bg-black/50">
+			<div class="p-4 bg-black/80 rounded-lg text-white text-center">
+				<p>Loading Discord Activity...</p>
+				<div class="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
+					<div class="h-full bg-blue-500 rounded-full animate-pulse" style="width: 60%"></div>
+				</div>
+			</div>
+		</div>
+	{/if}
+</div>
