@@ -9,7 +9,7 @@
 	import { ConvexHull } from "three/examples/jsm/Addons.js";
 	import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 	import RAPIER from "@dimforge/rapier3d-compat";
-	import { me, onPlayerJoin } from "playroomkit";
+	import { onPlayerJoin, me } from "playroomkit";
 
 	// Utils
 	import { Player } from "$lib/models/Player";
@@ -18,107 +18,59 @@
 
 	// Stores
 	import { guests } from "$lib/stores/guests";
-	import { onDestroy } from "svelte";
 
 	// Variables
-	let loader;
-	let textureLoader;
-	let gravity = { x: 0.0, y: -9.81, z: 0.0 };
+	const loader = new GLTFLoader();
+	const textureLoader = new THREE.TextureLoader();
+	const gravity = { x: 0.0, y: -9.81, z: 0.0 };
 	// If enabled, you can see yourself in the game as a static object
 	const debug = false;
 	let composer;
 	let rootElement;
 	let camera;
-	let animationId;
-	let world;
-	let renderer;
-	let labelRenderer;
-	let scene;
 
 	onMount(async () => {
 		try {
-			// Initialize loaders
-			loader = new GLTFLoader();
-			textureLoader = new THREE.TextureLoader();
-			
-			// Initialize physics
-			await RAPIER.init();
-			world = new RAPIER.World(gravity);
-			
-			// Initialize THREE.js scene
-			scene = initThree();
-			
-			// Initialize guests
+			const world = await initPhysics();
+			const scene = initThree(world);
 			initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
-			
-			console.log("Scene initialized successfully");
 		} catch (error) {
-			console.error("Error initializing scene:", error);
+			console.error("Failed to initialize scene:", error);
 		}
 	});
-	
-	onDestroy(() => {
-		if (animationId) {
-			cancelAnimationFrame(animationId);
-		}
-		
-		if (renderer) {
-			renderer.dispose();
-		}
-		
-		if (scene) {
-			disposeScene(scene);
-		}
-	});
-	
-	function disposeScene(scene) {
-		scene.traverse((object) => {
-			if (object.geometry) {
-				object.geometry.dispose();
-			}
-			
-			if (object.material) {
-				if (Array.isArray(object.material)) {
-					object.material.forEach(material => material.dispose());
-				} else {
-					object.material.dispose();
-				}
-			}
-		});
+
+	async function initPhysics() {
+		await RAPIER.init();
+		return new RAPIER.World(gravity);
 	}
 
-	function initThree() {
-		if (!rootElement) {
-			console.error("Root element not found");
-			return null;
-		}
-		
-		const renderWidth = rootElement.clientWidth || window.innerWidth;
-		const renderHeight = rootElement.clientHeight || window.innerHeight;
+	function initThree(world) {
+		const renderWidth = rootElement.clientWidth;
+		const renderHeight = rootElement.clientHeight;
 
-		labelRenderer = new CSS2DRenderer();
+		const labelRenderer = new CSS2DRenderer();
 		labelRenderer.setSize(renderWidth, renderHeight);
 		labelRenderer.domElement.style.position = "absolute";
 		labelRenderer.domElement.style.top = "0px";
 		rootElement.appendChild(labelRenderer.domElement);
 
-		renderer = new THREE.WebGLRenderer({ antialias: true });
+		const renderer = new THREE.WebGLRenderer({ antialias: true });
 		renderer.setSize(renderWidth, renderHeight);
 		renderer.setPixelRatio(window.devicePixelRatio);
 		renderer.shadowMap.enabled = true;
 		renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 		rootElement.appendChild(renderer.domElement);
 
-		const newScene = new THREE.Scene();
+		const scene = new THREE.Scene();
 
 		camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
 
 		// Initial setups
-		const ground = new Ground(newScene, world, 20);
-		const player = new Player(me(), newScene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
-		setupMap(newScene, world);
-		setupLights(newScene);
-		setupHDRI(newScene);
+		const ground = new Ground(scene, world, 20);
+		const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
+		setupMap(scene, world);
+		setupLights(scene);
+		setupHDRI(scene);
 
 		// Events
 		handleResize(renderer, labelRenderer, camera);
@@ -126,66 +78,41 @@
 			rootElement.requestPointerLock();
 		});
 
-		// Animation loop with proper reference
-		const animate = () => {
-			animationId = requestAnimationFrame(animate);
-			if (player) player.update();
+		renderer.setAnimationLoop(() => {
+			player.update();
 			updateGuests();
-			if (world) world.step();
-			renderer.render(newScene, camera);
-			labelRenderer.render(newScene, camera);
-		};
-		
-		animate();
+			world.step();
+			renderer.render(scene, camera);
+			labelRenderer.render(scene, camera);
+		});
 
-		return newScene;
+		return scene;
 	}
 
 	function handleResize(renderer, labelRenderer, camera) {
-		const resizeHandler = () => {
-			if (!rootElement) return;
-			
-			const newWidth = rootElement.clientWidth || window.innerWidth;
-			const newHeight = rootElement.clientHeight || window.innerHeight;
-			
-			if (camera) {
-				camera.aspect = newWidth / newHeight;
-				camera.updateProjectionMatrix();
-			}
-			
-			if (renderer) {
-				renderer.setSize(newWidth, newHeight);
-			}
-			
-			if (labelRenderer) {
-				labelRenderer.setSize(newWidth, newHeight);
-			}
-			
-			if (composer) {
-				composer.setSize(newWidth, newHeight);
-			}
-		};
-		
-		window.addEventListener("resize", resizeHandler);
-		
-		return () => {
-			window.removeEventListener("resize", resizeHandler);
-		};
+		window.addEventListener("resize", () => {
+			const newWidth = rootElement.clientWidth;
+			const newHeight = rootElement.clientHeight;
+			camera.aspect = newWidth / newHeight;
+			camera.updateProjectionMatrix();
+			renderer.setSize(newWidth, newHeight);
+			labelRenderer.setSize(newWidth, newHeight);
+			if (composer) composer.setSize(newWidth, newHeight);
+		});
 	}
 
 	function initGuests(scene, world, spawnPos) {
 		onPlayerJoin((playerState) => {
 			const myState = me();
+			if (!myState) return;
+			
 			const guestState = playerState;
-			
-			if (!myState || !guestState) return;
-			
 			if (guestState.id !== myState.id || debug) {
 				try {
 					const guest = new Guest(guestState, scene, world, spawnPos, debug);
 					$guests = [...$guests, guest];
 				} catch (error) {
-					console.error("Error creating guest:", error);
+					console.error("Error adding guest:", error);
 				}
 			}
 			
@@ -226,13 +153,11 @@
 			const convexHull = new ConvexHull().setFromObject(node);
 			const vertices = convexHull.vertices;
 			const buffer = new Float32Array(vertices.length * 3);
-			
 			for (let i = 0; i < vertices.length; i++) {
 				buffer[i * 3] = vertices[i].point.x;
 				buffer[i * 3 + 1] = vertices[i].point.y;
 				buffer[i * 3 + 2] = vertices[i].point.z;
 			}
-			
 			const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer);
 			world.createCollider(meshColliderDesc);
 		} catch (error) {
@@ -243,7 +168,6 @@
 	function setupLights(scene) {
 		const ambientLight = new THREE.AmbientLight("#E6F9EC", 1);
 		scene.add(ambientLight);
-		
 		const directionalLight = new THREE.DirectionalLight(0xffffff, 4.2);
 		directionalLight.castShadow = true;
 		directionalLight.shadow.bias = -0.0001;
