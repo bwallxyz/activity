@@ -36,9 +36,65 @@
 	let isDiscordEnvironment = false;
 	let initSuccessful = false;
 	let fallbackScene = false;
+	let isDiscordEnvironment = false;
+
+	function detectEnvironment() {
+	try {
+		// Check if we're in Discord (uses specific URL patterns or window properties)
+		isDiscordEnvironment = window.location.href.includes('discord.com') || 
+							!!window.DiscordNative || 
+							document.referrer.includes('discord.com');
+		
+		console.log(`[INFO] Environment detection: ${isDiscordEnvironment ? 'Discord' : 'Browser'}`);
+		return isDiscordEnvironment;
+	} catch (e) {
+		console.log('[INFO] Environment detection failed, assuming browser', e);
+		return false;
+	}
+	}
+
+
 
 	onMount(async () => {
 		logDebug("Component mounted - starting initialization");
+
+				try {
+    console.log('[INFO] Component mounted - starting initialization');
+    
+    // Detect environment
+    detectEnvironment();
+    
+    // Initialize physics
+    const world = await initPhysics();
+    
+    // Try to initialize PlayroomKit
+    let playroomInitialized = false;
+    try {
+      await initPlayroom();
+      playroomInitialized = true;
+    } catch (error) {
+      console.error('[ERROR] Playroom initialization failed', error);
+      
+      // If we're in Discord, this is critical - use fallback mode
+      if (isDiscordEnvironment) {
+        initFallbackMode(rootElement);
+        return;
+      }
+      // In browser, continue anyway
+    }
+    
+    // Initialize Three.js scene
+    const scene = initThree(world);
+    
+    // Only initialize guests if Playroom was initialized
+    if (playroomInitialized) {
+      initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+    }
+  } catch (error) {
+    console.error('[ERROR] Initialization error:', error);
+    // Last resort - fallback mode
+    initFallbackMode(rootElement);
+  }
         
 		// Check if we're in Discord
 		try {
@@ -262,38 +318,61 @@ function loadSkyboxAsync(scene) {
 	}
 
 	async function initPlayroom() {
-	try {
-		await insertCoin({
-			gameId: PUBLIC_PLAYROOM_ID, 
-			// Enable more Discord options for better integration
-			discord: {
-				// Include required Discord scopes
-				requiredScopes: ["identify", "activities.write"],
-				// Make sure to request proper permissions for Activity
-				permissions: ["activities.write"],
-				// Ensure the activity is properly configured
-				activityConfig: {
-					type: 0, // Playing
-					details: "3D Chat",
-					instance: true
-				}
-			}
-		});
-		return me();
-	} catch (error) {
-		console.error("Failed to initialize PlayroomKit:", error);
-		// Create fallback UI to inform the user
-		const errorDiv = document.createElement("div");
-		errorDiv.className = "fixed inset-0 bg-black/80 text-white flex flex-col items-center justify-center p-5";
-		errorDiv.innerHTML = `
-			<h1 class="text-2xl font-bold mb-4">Connection Error</h1>
-			<p class="text-center mb-4">Could not connect to Discord. Please make sure you're running this in Discord or try refreshing.</p>
-			<button class="px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700">Refresh</button>
-		`;
-		errorDiv.querySelector("button")?.addEventListener("click", () => location.reload());
-		document.body.appendChild(errorDiv);
-		throw error;
-	}
+  try {
+    // Simplified Discord integration that works better in Discord environment
+    await insertCoin({
+      gameId: PUBLIC_PLAYROOM_ID,
+      // Set to true instead of complex options
+      discord: true
+    });
+    
+    console.log("[INFO] Successfully connected to PlayroomKit");
+    return me();
+  } catch (error) {
+    console.error("[ERROR] Failed to initialize PlayroomKit:", error);
+    
+    // Create a more visible error message in the scene
+    const errorEl = document.createElement("div");
+    errorEl.style.position = "fixed";
+    errorEl.style.top = "0";
+    errorEl.style.left = "0";
+    errorEl.style.width = "100%";
+    errorEl.style.height = "100%";
+    errorEl.style.backgroundColor = "rgba(0,0,0,0.8)";
+    errorEl.style.color = "white";
+    errorEl.style.display = "flex";
+    errorEl.style.flexDirection = "column";
+    errorEl.style.alignItems = "center";
+    errorEl.style.justifyContent = "center";
+    errorEl.style.padding = "20px";
+    errorEl.style.zIndex = "9999";
+    errorEl.style.fontFamily = "sans-serif";
+    
+    errorEl.innerHTML = `
+      <h2 style="margin-bottom: 20px;">Discord Connection Error</h2>
+      <p style="margin-bottom: 20px; text-align: center; max-width: 600px;">
+        Please make sure you're running this in Discord with the right permissions.
+        This app needs to be run inside a Discord Activity.
+      </p>
+      <button style="padding: 10px 20px; background: #5865F2; border: none; border-radius: 4px; cursor: pointer;">
+        Retry Connection
+      </button>
+    `;
+    
+    document.body.appendChild(errorEl);
+    errorEl.querySelector("button")?.addEventListener("click", () => location.reload());
+    
+    // Create a fallback user to at least let the app run in solo mode
+    console.log("[INFO] Creating fallback solo mode...");
+    
+    // Return a minimal object to prevent further errors
+    return {
+      id: "solo-mode",
+      getProfile: () => ({ name: "Solo Player", photo: "" }),
+      setState: () => {},
+      getState: () => null
+    };
+  }
 }
 
 function setupMap(scene: THREE.Scene, world: RAPIER.World) {
@@ -421,6 +500,98 @@ function setupCollider(world: RAPIER.World, node: THREE.Mesh) {
 			}
 		);
 	}
+
+
+	function initFallbackMode(rootElement: HTMLElement) {
+  console.log('[INFO] Initializing fallback mode');
+  
+  // Clear any existing content
+  rootElement.innerHTML = '';
+  
+  // Create a simple canvas for rendering
+  const canvas = document.createElement('canvas');
+  canvas.width = rootElement.clientWidth;
+  canvas.height = rootElement.clientHeight;
+  rootElement.appendChild(canvas);
+  
+  // Initialize basic Three.js scene
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(canvas.width, canvas.height);
+  
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a2e);
+  
+  const camera = new THREE.PerspectiveCamera(75, canvas.width / canvas.height, 0.1, 1000);
+  camera.position.set(0, 1.5, 3);
+  camera.lookAt(0, 0, 0);
+  
+  // Add lights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(1, 2, 3);
+  scene.add(directionalLight);
+  
+  // Add a simple floor
+  const floorGeometry = new THREE.PlaneGeometry(10, 10);
+  const floorMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x3a506b,
+    roughness: 0.8 
+  });
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -0.5;
+  scene.add(floor);
+  
+  // Add a cube representing the player
+  const cubeGeometry = new THREE.BoxGeometry(0.5, 1, 0.5);
+  const cubeMaterial = new THREE.MeshStandardMaterial({ color: 0x5bc0be });
+  const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+  cube.position.y = 0.5;
+  scene.add(cube);
+  
+  // Add text explaining the situation
+  const textDiv = document.createElement('div');
+  textDiv.style.position = 'absolute';
+  textDiv.style.top = '20px';
+  textDiv.style.left = '0';
+  textDiv.style.width = '100%';
+  textDiv.style.textAlign = 'center';
+  textDiv.style.color = 'white';
+  textDiv.style.fontFamily = 'sans-serif';
+  textDiv.style.fontSize = '18px';
+  textDiv.style.padding = '10px';
+  textDiv.innerHTML = `
+    <h2>Running in Fallback Mode</h2>
+    <p>Discord integration is disabled. Some features may be limited.</p>
+    <button id="retry-btn" style="padding: 8px 16px; margin-top: 10px; background: #5865F2; border: none; border-radius: 4px; color: white; cursor: pointer;">
+      Retry Connection
+    </button>
+  `;
+  rootElement.appendChild(textDiv);
+  document.getElementById('retry-btn')?.addEventListener('click', () => location.reload());
+  
+  // Animation loop
+  function animate() {
+    requestAnimationFrame(animate);
+    cube.rotation.y += 0.01;
+    renderer.render(scene, camera);
+  }
+  animate();
+  
+  // Handle resize
+  window.addEventListener('resize', () => {
+    const width = rootElement.clientWidth;
+    const height = rootElement.clientHeight;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+  });
+  
+  return true;
+}
+
 
 	function updateGuests() {
 		for (const guest of $guests) {
