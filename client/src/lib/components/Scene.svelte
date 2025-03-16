@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
 	import * as THREE from "three";
-	import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-	import { ConvexHull } from "three/examples/jsm/Addons.js";
+	import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 	import RAPIER from "@dimforge/rapier3d-compat";
 	
 	// Components
 	import { Player } from "$lib/models/Player";
 	import { Ground } from "$lib/models/Ground";
-	import { Guest } from "$lib/models/Guest";
 	
 	// Stores
 	import { writable } from "svelte/store";
@@ -17,12 +15,12 @@
 	let rootElement;
 	let camera;
 	let player;
-	let discordChannel;
 	let playerId = "local-" + Math.random().toString(36).substring(2, 9);
+	let debugText = "";
 	
-	// Simple multiplayer store to replace PlayroomKit
+	// Simple multiplayer store
 	const players = writable({});
-	let myPosition = { x: 0, y: 0, z: 0 };
+	let myPosition = { x: 0, y: 2, z: 0 };
 	
 	// Check if we're in Discord
 	const isDiscord = typeof window !== 'undefined' && (
@@ -39,28 +37,36 @@
 			
 			const world = await initPhysics();
 			const scene = initThree(world);
+			
+			// Add debug player in development mode
+			if (!isDiscord) {
+				addDebugPlayer(scene);
+			}
 		} catch (error) {
 			console.error("Failed to initialize:", error);
+			debugText = "Error: " + error.message;
 		}
 	});
 	
 	onDestroy(() => {
-		// Clean up message listener
 		window.removeEventListener("message", handleDiscordMessage);
 	});
 	
 	function initDiscordMultiplayer() {
+		debugText = "Discord multiplayer initializing...";
+		
 		// Setup communication with Discord
 		window.addEventListener("message", handleDiscordMessage);
 		
 		// Let Discord know we're ready
 		window.parent.postMessage({ type: "ACTIVITY_READY" }, "*");
+		debugText += "\nSent ACTIVITY_READY";
 		
 		// Send position updates to Discord
 		setInterval(() => {
 			if (myPosition) {
 				window.parent.postMessage({
-					type: "ACTIVITY_UPDATE_STATE",
+					type: "ACTIVITY_SET_STATE",  // Changed from UPDATE_STATE to SET_STATE
 					data: { position: myPosition }
 				}, "*");
 			}
@@ -68,51 +74,103 @@
 	}
 	
 	function handleDiscordMessage(event) {
-		// Only process messages from Discord
-		if (!event.origin.includes("discord.com")) return;
+		// Only process messages from Discord or any origin in dev
+		if (!event.origin.includes("discord.com") && isDiscord) return;
 		
 		const { type, data } = event.data || {};
+		debugText = "Received message: " + type;
 		
-		if (type === "ACTIVITY_MEMBER_JOIN") {
+		if (type === "ACTIVITY_JOIN") {
 			// New player joined
+			debugText += "\nPlayer joined: " + (data?.username || "unknown");
 			const newPlayer = {
-				id: data.userId,
-				name: data.username,
+				id: data.userId || "guest-" + Math.random().toString(36).substring(2, 9),
+				name: data.username || "Guest",
 				position: { x: 0, y: 2, z: 0 }
 			};
 			
 			players.update(current => ({
 				...current,
-				[data.userId]: newPlayer
+				[newPlayer.id]: newPlayer
 			}));
 		}
-		else if (type === "ACTIVITY_MEMBER_LEAVE") {
+		else if (type === "ACTIVITY_LEAVE") {
 			// Player left
+			debugText += "\nPlayer left: " + data?.userId;
 			players.update(current => {
 				const updated = { ...current };
-				delete updated[data.userId];
+				delete updated[data?.userId];
 				return updated;
 			});
 		}
+		else if (type === "ACTIVITY_STATE_SYNC") {
+			// Full state sync from Discord
+			debugText += "\nState sync received";
+			
+			// Process all player states
+			const discordState = data?.state || {};
+			const playerStates = {};
+			
+			Object.entries(discordState).forEach(([userId, state]) => {
+				if (userId === playerId) return; // Skip self
+				
+				playerStates[userId] = {
+					id: userId,
+					name: state.username || "Guest",
+					position: state.position || { x: 0, y: 2, z: 0 }
+				};
+			});
+			
+			players.set(playerStates);
+		}
 		else if (type === "ACTIVITY_STATE_UPDATE") {
 			// Player state updated
-			const userId = data.userId;
-			const position = data.state?.position;
+			const userId = data?.userId;
+			const position = data?.state?.position;
 			
 			if (userId && position) {
+				debugText += "\nReceived position update from: " + userId;
+				
 				players.update(current => {
-					if (!current[userId]) return current;
+					// Create player if they don't exist
+					if (!current[userId]) {
+						return {
+							...current,
+							[userId]: {
+								id: userId,
+								name: "Guest " + userId.substring(0, 4),
+								position: position
+							}
+						};
+					}
 					
+					// Update existing player
 					return {
 						...current,
 						[userId]: {
 							...current[userId],
-							position
+							position: position
 						}
 					};
 				});
 			}
 		}
+	}
+	
+	function addDebugPlayer(scene) {
+		// Add a test player in development mode
+		setTimeout(() => {
+			players.update(current => ({
+				...current,
+				"test-player": {
+					id: "test-player",
+					name: "Test Player",
+					position: { x: 3, y: 2, z: 3 }
+				}
+			}));
+			
+			debugText = "Added test player";
+		}, 2000);
 	}
 	
 	async function initPhysics() {
@@ -164,12 +222,18 @@
 		
 		// Subscribe to player updates
 		const unsubscribe = players.subscribe(playerData => {
+			debugText = "Players store updated: " + Object.keys(playerData).length + " players";
+			
 			Object.entries(playerData).forEach(([id, data]) => {
 				// Skip self
 				if (id === playerId) return;
 				
+				debugText += "\nHandling player: " + id;
+				
 				// Create new player if needed
 				if (!otherPlayers[id]) {
+					debugText += "\nCreating new player mesh";
+					
 					// Create player mesh
 					const geometry = new THREE.CapsuleGeometry(0.125, 0.25, 10, 16);
 					const material = new THREE.MeshStandardMaterial({
@@ -183,8 +247,7 @@
 					const nameDiv = document.createElement("div");
 					nameDiv.className = "rounded-full px-2 py-1 bg-black/50 backdrop-blur-xl text-white text-sm";
 					nameDiv.textContent = data.name || "Guest";
-					
-					const nameTag = new THREE.Object3D();
+					const nameTag = new CSS2DObject(nameDiv);
 					nameTag.position.set(0, 0.5, 0);
 					mesh.add(nameTag);
 					
@@ -193,6 +256,7 @@
 				
 				// Update position
 				if (data.position) {
+					debugText += "\nUpdating position for: " + id;
 					otherPlayers[id].mesh.position.set(
 						data.position.x,
 						data.position.y,
@@ -204,6 +268,7 @@
 			// Remove players that left
 			Object.keys(otherPlayers).forEach(id => {
 				if (!playerData[id]) {
+					debugText += "\nRemoving player: " + id;
 					scene.remove(otherPlayers[id].mesh);
 					delete otherPlayers[id];
 				}
@@ -308,4 +373,9 @@
 </script>
 
 <!-- Main container -->
-<div class="h-full w-full flex flex-col justify-center items-center" bind:this={rootElement}></div>
+<div class="h-full w-full flex flex-col justify-center items-center" bind:this={rootElement}>
+	<!-- Debug overlay -->
+	<div class="fixed top-0 left-0 p-4 bg-black/70 text-white text-xs font-mono whitespace-pre-wrap max-w-xs max-h-64 overflow-auto">
+		{debugText}
+	</div>
+</div>
