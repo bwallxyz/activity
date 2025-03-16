@@ -26,6 +26,12 @@ export default defineConfig({
     target: "esnext",
   },
   server: {
+	proxy: {
+			'/_ws': {
+				target: 'wss://discordsays.com',
+				ws: true,
+				changeOrigin: true
+			},
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Cross-Origin-Embedder-Policy': 'credentialless',

@@ -1,23 +1,14 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 	<head>
+		<title>Discord Activity Template</title>
 		<meta charset="utf-8" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.png" />
-		<meta name="viewport" content="width=device-width" />
-		<!-- Remove any existing CSP meta tags -->
-		<!-- Add this comprehensive CSP that explicitly allows Discord domains -->
-		<meta http-equiv="Content-Security-Policy" content="
-			default-src 'self';
-			connect-src 'self' https://*.discordsays.com/_ws/* wss://*.discordsays.com/_ws/* https://*.discord.com/* wss://*.discord.com/* data: blob:;
-			script-src 'self' 'unsafe-inline' 'unsafe-eval';
-			style-src 'self' 'unsafe-inline';
-			img-src 'self' data: https://*.discord.com/* https://*.discordapp.com/*;
-			font-src 'self';
-			frame-src 'self' https://*.discord.com/*;
-		">
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://*.discordsays.com wss://*.discordsays.com https://*.joinplayroom.com wss://*.joinplayroom.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';">
 		%sveltekit.head%
 	</head>
-	<body data-sveltekit-preload-data="hover">
+	<body data-sveltekit-preload-data="hover" class="bg-black">
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>
