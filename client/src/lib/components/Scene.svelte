@@ -36,7 +36,6 @@
 	let isDiscordEnvironment = false;
 	let initSuccessful = false;
 	let fallbackScene = false;
-	let isDiscordEnvironment = false;
 
 	function detectEnvironment() {
 	try {
