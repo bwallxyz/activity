@@ -25,7 +25,7 @@ export class Guest {
 	private spawn() {
 		const geometry = new THREE.CapsuleGeometry(0.125, 0.25, 10, 16);
 		const material = new THREE.MeshStandardMaterial({
-			color: "#FFFFFF",
+			color: this.playerState.getColor() || "#FFFFFF", // Get player color if available
 			roughness: 0.5,
 		});
 		const player = new THREE.Mesh(geometry, material);
@@ -59,14 +59,24 @@ export class Guest {
 		nameDiv.className =
 			"rounded-full flex flex-row justify-center items-center space-x-1 bg-black/50 backdrop-blur-xl text-white text-sm p-1 pr-2";
 
+		const profile = this.playerState.getProfile();
 		const name = document.createElement("p");
-		name.textContent = this.playerState.getProfile().name;
+		name.textContent = profile.name || `Player ${this.playerState.id.substring(0, 4)}`; // Fallback name if not available
 
-		const guestImage = document.createElement("img");
-		guestImage.src = this.playerState.getProfile().photo;
-		guestImage.className = "rounded-full w-5 h-5";
+		// Only add image if profile photo exists
+		if (profile.photo) {
+			const guestImage = document.createElement("img");
+			guestImage.src = profile.photo;
+			guestImage.className = "rounded-full w-5 h-5";
+			nameDiv.appendChild(guestImage);
+		} else {
+			// Add a placeholder avatar as a colored circle
+			const colorCircle = document.createElement("div");
+			colorCircle.className = "rounded-full w-5 h-5";
+			colorCircle.style.backgroundColor = this.playerState.getColor() || "#FFFFFF";
+			nameDiv.appendChild(colorCircle);
+		}
 
-		nameDiv.appendChild(guestImage);
 		nameDiv.appendChild(name);
 
 		return new CSS2DObject(nameDiv);
