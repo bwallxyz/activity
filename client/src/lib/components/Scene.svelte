@@ -32,11 +32,18 @@
 	let rootElement: HTMLElement;
 	let camera: THREE.PerspectiveCamera;
 
+	export let isInitialized = false;
+
 	onMount(async () => {
-		const world = await initPhysics();
-		await initPlayroom();
-		const scene = initThree(world);
-		initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+		try {
+			const world = await initPhysics();
+			await initPlayroom();
+			const scene = initThree(world);
+			initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
+			isInitialized = true;
+		} catch (error) {
+			console.error("Failed to initialize scene:", error);
+		}
 	});
 
 	function initThree(world: RAPIER.World) {
