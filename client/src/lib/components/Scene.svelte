@@ -42,10 +42,7 @@
 		try {
 			const world = await initPhysics();
 			const scene = initThree(world);
-			// Skip guest initialization in Discord as it depends on PlayroomKit
-			if (!window.location.href.includes("discord.com")) {
-				initGuests(scene, world, new THREE.Vector3(0, 0.2, 0));
-			}
+			// No guest initialization in Discord environment
 		} catch (error) {
 			console.error("Failed to initialize scene:", error);
 		}
@@ -80,9 +77,8 @@
 		// Initial setups
 		const ground = new Ground(scene, world, 20);
 		
-		// Use fake player state when in Discord to avoid PlayroomKit dependencies
-		const playerState = window.location.href.includes("discord.com") ? 
-			fakePlayerState : window.me();
+		// Always use fake player state for Discord compatibility
+		const playerState = fakePlayerState;
 		
 		const player = new Player(
 			playerState, 
@@ -93,16 +89,8 @@
 			new THREE.Vector3(0, 2, 0)
 		);
 		
-		// Skip loading remote assets in Discord due to CSP
-		const isDiscord = window.location.href.includes("discord.com");
-		if (!isDiscord) {
-			setupMap(scene, world);
-			setupHDRI(scene);
-		} else {
-			// Create a simple scene for Discord
-			createSimpleScene(scene);
-		}
-		
+		// Create a simple scene with built-in geometry instead of loading assets
+		createSimpleScene(scene, world);
 		setupLights(scene);
 
 		// Events
@@ -113,7 +101,6 @@
 
 		renderer.setAnimationLoop(() => {
 			player.update();
-			updateGuests();
 			world.step();
 			renderer.render(scene, camera);
 			labelRenderer.render(scene, camera);
@@ -122,7 +109,7 @@
 		return scene;
 	}
 	
-	function createSimpleScene(scene) {
+	function createSimpleScene(scene, world) {
 		// Add simple geometry instead of loading GLB
 		const floorGeometry = new THREE.PlaneGeometry(40, 40);
 		const floorMaterial = new THREE.MeshStandardMaterial({ 
@@ -150,6 +137,15 @@
 			box.castShadow = true;
 			box.receiveShadow = true;
 			scene.add(box);
+			
+			// Add physics for the box
+			try {
+				const boxDesc = RAPIER.ColliderDesc.cuboid(1, 2, 1);
+				boxDesc.setTranslation(box.position.x, box.position.y, box.position.z);
+				world.createCollider(boxDesc);
+			} catch (error) {
+				console.error("Error creating physics for box:", error);
+			}
 		}
 		
 		// Create simple sky
@@ -174,70 +170,6 @@
 		});
 	}
 
-	function initGuests(scene, world, spawnPos) {
-		window.onPlayerJoin((playerState) => {
-			const myState = window.me();
-			if (!myState) return;
-			
-			const guestState = playerState;
-			if (guestState.id !== myState.id || debug) {
-				try {
-					const guest = new Guest(guestState, scene, world, spawnPos, debug);
-					$guests = [...$guests, guest];
-				} catch (error) {
-					console.error("Error adding guest:", error);
-				}
-			}
-			
-			playerState.onQuit(() => {
-				const guest = $guests.find((g) => g.playerState.id === playerState.id);
-				if (guest) {
-					guest.despawn();
-					$guests = $guests.filter((g) => g.playerState.id !== playerState.id);
-				}
-			});
-		});
-	}
-
-	function setupMap(scene, world) {
-		const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
-		loader.load(
-			"scenes/map.glb",
-			function (gltf) {
-				const model = gltf.scene;
-				model.traverse((node) => {
-					if (node instanceof THREE.Mesh) {
-						node.castShadow = true;
-						node.receiveShadow = true;
-						if (!excludedMeshes.includes(node.name)) setupCollider(world, node);
-					}
-				});
-				scene.add(model);
-			},
-			undefined,
-			function (error) {
-				console.log("Error loading GLB:", error);
-			}
-		);
-	}
-
-	function setupCollider(world, node) {
-		try {
-			const convexHull = new ConvexHull().setFromObject(node);
-			const vertices = convexHull.vertices;
-			const buffer = new Float32Array(vertices.length * 3);
-			for (let i = 0; i < vertices.length; i++) {
-				buffer[i * 3] = vertices[i].point.x;
-				buffer[i * 3 + 1] = vertices[i].point.y;
-				buffer[i * 3 + 2] = vertices[i].point.z;
-			}
-			const meshColliderDesc = RAPIER.ColliderDesc.convexHull(buffer);
-			world.createCollider(meshColliderDesc);
-		} catch (error) {
-			console.error("Error setting up collider:", error);
-		}
-	}
-
 	function setupLights(scene) {
 		const ambientLight = new THREE.AmbientLight("#E6F9EC", 1);
 		scene.add(ambientLight);
@@ -255,29 +187,6 @@
 		directionalLight.rotation.z = Math.PI / 4;
 		directionalLight.position.set(-20, 20, 0);
 		scene.add(directionalLight);
-	}
-
-	function setupHDRI(scene) {
-		try {
-			const texture = textureLoader.load("textures/skybox.png");
-			const geometry = new THREE.SphereGeometry(200, 32, 32);
-			geometry.scale(-1, 1, 1);
-			const material = new THREE.MeshBasicMaterial({ map: texture });
-			const sphere = new THREE.Mesh(geometry, material);
-			scene.add(sphere);
-		} catch (error) {
-			console.error("Error setting up HDRI:", error);
-		}
-	}
-
-	function updateGuests() {
-		for (const guest of $guests) {
-			try {
-				guest.update();
-			} catch (error) {
-				console.error("Error updating guest:", error);
-			}
-		}
 	}
 </script>
 
