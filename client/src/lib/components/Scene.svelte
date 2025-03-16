@@ -35,6 +35,7 @@
 	let renderer: THREE.WebGLRenderer;
 	let isDiscordEnvironment = false;
 	let initSuccessful = false;
+	let fallbackScene = false;
 
 	onMount(async () => {
 		logDebug("Component mounted - starting initialization");
@@ -94,71 +95,185 @@
 	}
 
 	function initThree(world: RAPIER.World) {
-		try {
-			const renderWidth = rootElement.clientWidth;
-			const renderHeight = rootElement.clientHeight;
+  try {
+    const renderWidth = rootElement.clientWidth;
+    const renderHeight = rootElement.clientHeight;
 
-			logDebug(`Setting up renderer: ${renderWidth}x${renderHeight}`);
+    logDebug(`Setting up renderer: ${renderWidth}x${renderHeight}`);
 
-			const labelRenderer = new CSS2DRenderer();
-			labelRenderer.setSize(renderWidth, renderHeight);
-			labelRenderer.domElement.style.position = "absolute";
-			labelRenderer.domElement.style.top = "0px";
-			rootElement.appendChild(labelRenderer.domElement);
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(renderWidth, renderHeight);
+    labelRenderer.domElement.style.position = "absolute";
+    labelRenderer.domElement.style.top = "0px";
+    rootElement.appendChild(labelRenderer.domElement);
 
-			renderer = new THREE.WebGLRenderer({ 
-				antialias: true,
-				powerPreference: 'high-performance',
-				alpha: false
-			});
-			
-			renderer.setSize(renderWidth, renderHeight);
-			renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio
-			renderer.shadowMap.enabled = true;
-			renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-			rootElement.appendChild(renderer.domElement);
+    // Simplified renderer options for Discord compatibility
+    renderer = new THREE.WebGLRenderer({ 
+      antialias: false,
+      alpha: true,
+      preserveDrawingBuffer: true,
+      powerPreference: 'default'
+    });
+    
+    renderer.setSize(renderWidth, renderHeight);
+    renderer.setPixelRatio(1.0); // Force lowest pixel ratio for performance
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.BasicShadowMap; // Use basic for performance
+    rootElement.appendChild(renderer.domElement);
 
-			const scene = new THREE.Scene();
-			logDebug("Scene created");
+    const scene = new THREE.Scene();
+    logDebug("Scene created");
 
-			camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
-			camera.near = 0.1;
-			camera.far = 1000;
-			logDebug("Camera created");
+    camera = new THREE.PerspectiveCamera(65, renderWidth / renderHeight);
+    camera.near = 0.1;
+    camera.far = 1000;
+    logDebug("Camera created");
 
-			// Initial setups
-			const ground = new Ground(scene, world, 20);
-			logDebug("Ground created");
-			
-			const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
-			logDebug("Player created");
-			
-			setupMap(scene, world);
-			setupLights(scene);
-			setupHDRI(scene);
+    // Create a minimal scene first to ensure rendering works
+    createMinimalScene(scene);
+    
+    // Then attempt to load the full scene
+    const ground = new Ground(scene, world, 20);
+    logDebug("Ground created");
+    
+    const player = new Player(me(), scene, world, ground.rigidBody.collider(0), camera, new THREE.Vector3(0, 2, 0));
+    logDebug("Player created");
+    
+    // Load assets asynchronously
+    Promise.all([
+      loadMapAsync(scene, world),
+      loadSkyboxAsync(scene)
+    ]).then(() => {
+      logDebug("All assets loaded successfully", "success");
+    }).catch(err => {
+      logDebug(`Asset loading failed: ${err}`, "error");
+      fallbackScene = true;
+    });
 
-			// Events
-			handleResize(renderer, labelRenderer, camera);
-			rootElement.addEventListener("click", () => {
-				rootElement.requestPointerLock();
-			});
+    // Setup basic lighting
+    const ambientLight = new THREE.AmbientLight("#FFFFFF", 1.5); // Brighter ambient light
+    scene.add(ambientLight);
+    
+    // Simplified directional light
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
+    directionalLight.position.set(-10, 10, 0);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.width = 1024; // Reduced for performance
+    directionalLight.shadow.mapSize.height = 1024;
+    scene.add(directionalLight);
 
-			renderer.setAnimationLoop((time) => {
-				if (initSuccessful) {
-					player.update();
-					updateGuests();
-					world.step();
-					renderer.render(scene, camera);
-					labelRenderer.render(scene, camera);
-				}
-			});
+    // Events
+    handleResize(renderer, labelRenderer, camera);
+    rootElement.addEventListener("click", () => {
+      rootElement.requestPointerLock();
+    });
 
-			return scene;
-		} catch (error) {
-			logDebug(`Three.js initialization error: ${error}`, 'error');
-			throw error;
-		}
-	}
+    // Animation loop
+    renderer.setAnimationLoop((time) => {
+      if (initSuccessful) {
+        player.update();
+        updateGuests();
+        world.step();
+        renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+      }
+    });
+
+    return scene;
+  } catch (error) {
+    logDebug(`Three.js initialization error: ${error}`, 'error');
+    throw error;
+  }
+}
+
+// Add these new helper functions
+function createMinimalScene(scene) {
+  // Add a simple cube to verify rendering works
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+  const cube = new THREE.Mesh(geometry, material);
+  cube.position.set(0, 0, -5);
+  scene.add(cube);
+  
+  // Animation to rotate cube
+  renderer.setAnimationLoop(() => {
+    if (cube) {
+      cube.rotation.x += 0.01;
+      cube.rotation.y += 0.01;
+    }
+    renderer.render(scene, camera);
+  });
+}
+
+// Promisify asset loading
+function loadMapAsync(scene, world) {
+  return new Promise((resolve, reject) => {
+    try {
+      const excludedMeshes = ["wall-narrow-gate", "metal-gate001", "bridge-draw001"];
+      loader.load(
+        "/scenes/map.glb",
+        function(gltf) {
+          const model = gltf.scene;
+          logDebug("Map model loaded successfully");
+          model.traverse((node) => {
+            if (node instanceof THREE.Mesh) {
+              node.castShadow = true;
+              node.receiveShadow = true;
+              if (!excludedMeshes.includes(node.name)) {
+                try {
+                  setupCollider(world, node);
+                } catch (e) {
+                  logDebug(`Collider setup failed for ${node.name}: ${e}`, "error");
+                }
+              }
+            }
+          });
+          scene.add(model);
+          initStatus.update(s => ({ ...s, assets: { ...s.assets, models: true }}));
+          resolve();
+        },
+        function(progress) {
+          logDebug(`Map loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+        },
+        function(error) {
+          logDebug(`Error loading map GLB: ${error}`, 'error');
+          reject(error);
+        }
+      );
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function loadSkyboxAsync(scene) {
+  return new Promise((resolve, reject) => {
+    try {
+      textureLoader.load(
+        "/textures/skybox.png",
+        function(texture) {
+          logDebug("Skybox texture loaded successfully");
+          const geometry = new THREE.SphereGeometry(200, 16, 16); // Reduced segments
+          geometry.scale(-1, 1, 1);
+          const material = new THREE.MeshBasicMaterial({ map: texture });
+          const sphere = new THREE.Mesh(geometry, material);
+          scene.add(sphere);
+          initStatus.update(s => ({ ...s, assets: { ...s.assets, textures: true }}));
+          resolve();
+        },
+        function(progress) {
+          logDebug(`Skybox loading progress: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+        },
+        function(error) {
+          logDebug(`Error loading skybox texture: ${error}`, 'error');
+          reject(error);
+        }
+      );
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
 
 	function handleResize(renderer: THREE.WebGLRenderer, labelRenderer: CSS2DRenderer, camera: THREE.PerspectiveCamera) {
 		window.addEventListener("resize", () => {
